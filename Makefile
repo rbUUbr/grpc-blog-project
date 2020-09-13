@@ -11,5 +11,5 @@ client:
 # Run protoc generator
 .PHONY: proto
 proto:
-	protoc -I=. --go_out=plugins=grpc:pb/. pb/blog.proto
+	protoc -I=. --go_out=plugins=grpc:. pb/blog.proto
 

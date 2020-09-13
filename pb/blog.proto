@@ -2,11 +2,14 @@ syntax = "proto3";
 
 package blog;
 
-option go_package = "pb;blogpb";
+option go_package = "blogpb";
 
 message Blog {
 	string id = 1;
 	string author_id = 2;
 	string title = 3;
 	string content = 4;
+}
+
+service BlogService {
 }
