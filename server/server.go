@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"google.golang.org/grpc"
-	blogpb "grpcBlog/pb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	postpb "grpcBlog/pb"
 	"net"
 	"os"
 	"os/signal"
@@ -45,7 +48,7 @@ func main() {
 	}
 	var opts []grpc.ServerOption
 	s := grpc.NewServer(opts...)
-	blogpb.RegisterBlogServiceServer(s, &server{})
+	postpb.RegisterPostServiceServer(s, &server{})
 	go func() {
 		fmt.Println("starting server")
 		if err := s.Serve(lis); err != nil {
@@ -59,4 +62,74 @@ func main() {
 	s.Stop()
 	client.Disconnect(ctx)
 	lis.Close()
+}
+
+func (s *server) CreatePost(ctx context.Context, request *postpb.CreatePostRequest) (*postpb.CreatePostResponse, error) {
+	postData := request.GetPost()
+	data := &post{
+		AuthorID: postData.GetAuthorId(),
+		Title:    postData.GetTitle(),
+		Content:  postData.GetContent(),
+	}
+	rsp, err := collection.InsertOne(ctx, data)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Internal error %s", err.Error()))
+	}
+	fmt.Println("Inserted: ", rsp.InsertedID)
+	oid, ok := rsp.InsertedID.(primitive.ObjectID)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "Internal error")
+	}
+	return &postpb.CreatePostResponse{Post: &postpb.Post{
+		Id:       oid.Hex(),
+		AuthorId: postData.GetAuthorId(),
+		Title:    postData.GetTitle(),
+		Content:  postData.GetContent(),
+	}}, nil
+}
+
+func (s *server) ReadPost(ctx context.Context, request *postpb.ReadPostRequest) (*postpb.ReadPostResponse, error) {
+	postID := request.GetPostId()
+	oid, err := primitive.ObjectIDFromHex(postID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Internal error %s", err.Error()))
+	}
+	data := &post{}
+	filter := bson.M{"_id": oid}
+	err = collection.FindOne(ctx, filter).Decode(&data)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Internal error %s", err.Error()))
+	}
+	return &postpb.ReadPostResponse{Post: &postpb.Post{
+		Id:       data.ID.Hex(),
+		AuthorId: data.AuthorID,
+		Title:    data.Title,
+		Content:  data.Content,
+	}}, nil
+}
+
+func (s *server) ListPost(request *postpb.ListPostRequest, stream postpb.PostService_ListPostServer) error {
+	cursor, err := collection.Find(context.Background(), primitive.D{{}})
+	if err != nil {
+		return status.Errorf(codes.Internal, fmt.Sprintf("Internal error %s", err.Error()))
+	}
+	defer cursor.Close(context.Background())
+	for cursor.Next(context.Background()) {
+		data := &post{}
+		err := cursor.Decode(&data)
+		if err != nil {
+			return status.Errorf(codes.Internal, fmt.Sprintf("Error while decoding data from Mongo DB %s", err.Error()))
+
+		}
+		stream.Send(&postpb.ListPostResponse{Post: &postpb.Post{
+			Id:       data.ID.Hex(),
+			AuthorId: data.AuthorID,
+			Title:    data.Title,
+			Content:  data.Content,
+		}})
+	}
+	if err := cursor.Err(); err != nil {
+		return status.Errorf(codes.Internal, fmt.Sprintf("Unknown server error %s", err.Error()))
+	}
+	return nil
 }
